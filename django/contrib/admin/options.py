@@ -1,6 +1,7 @@
 import copy
 import json
 import operator
+import re
 from collections import OrderedDict
 from functools import partial, reduce, update_wrapper
 from urllib.parse import quote as urlquote
@@ -1583,6 +1584,12 @@ class ModelAdmin(BaseModelAdmin):
     def change_view(self, request, object_id, form_url='', extra_context=None):
         return self.changeform_view(request, object_id, form_url, extra_context)
 
+    def get_edited_object_pks(self, request, prefix):
+        pk_pattern = re.compile('{prefix}-\d+-{pk_name}$'.format(prefix=prefix, pk_name=self.model._meta.pk.name))
+        return [
+            value for key, value in request.POST.items() if pk_pattern.match(key)
+        ]
+
     @csrf_protect_m
     def changelist_view(self, request, extra_context=None):
         """
@@ -1657,7 +1664,13 @@ class ModelAdmin(BaseModelAdmin):
         # Handle POSTed bulk-edit data.
         if request.method == 'POST' and cl.list_editable and '_save' in request.POST:
             FormSet = self.get_changelist_formset(request)
-            formset = cl.formset = FormSet(request.POST, request.FILES, queryset=self.get_queryset(request))
+            object_pks = self.get_edited_object_pks(request, FormSet.get_default_prefix())
+            try:
+                # Verifies that the changed objects have valid pks
+                modified_objects = self.get_queryset(request).filter(pk__in=object_pks)
+            except Exception:
+                raise ValidationError("Invalid Primary Key Provided")
+            formset = cl.formset = FormSet(request.POST, request.FILES, queryset=modified_objects)
             if formset.is_valid():
                 changecount = 0
                 for form in formset.forms:
